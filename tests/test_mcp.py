@@ -581,6 +581,34 @@ async def test_attach_file_custom_mimetype():
 # ===========================================================================
 
 @pytest.mark.asyncio
+async def test_add_comment_uses_mt_comment():
+    captured = {}
+    def capture(_model, method, args, kwargs=None):
+        if method == "message_post":
+            captured.update(kwargs or {})
+            return 77
+    with patch.object(OdooClient, "_rpc_sync", side_effect=capture):
+        from tools.write import add_comment
+        result = await add_comment(42, "Ship it!")
+    assert result["message_id"] == 77
+    assert captured["subtype_xmlid"] == "mail.mt_comment"
+
+
+@pytest.mark.asyncio
+async def test_post_log_note_uses_mt_note():
+    captured = {}
+    def capture(_model, method, args, kwargs=None):
+        if method == "message_post":
+            captured.update(kwargs or {})
+            return 88
+    with patch.object(OdooClient, "_rpc_sync", side_effect=capture):
+        from tools.write import post_log_note
+        result = await post_log_note(42, "Internal note: context saved.")
+    assert result["message_id"] == 88
+    assert captured["subtype_xmlid"] == "mail.mt_note"
+
+
+@pytest.mark.asyncio
 async def test_list_attachments_returns_metadata():
     from tools.read import list_attachments
     att_records = [

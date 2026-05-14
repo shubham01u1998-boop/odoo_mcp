@@ -1,5 +1,5 @@
 """
-PURPOSE: MCP server entry point — bootstraps FastMCP and registers all 15 tools.
+PURPOSE: MCP server entry point — bootstraps FastMCP and registers all 20 tools.
 EXPORTS: none (run directly: `python server.py` or referenced in Claude MCP config)
 DEPENDS ON: tools/read.py, tools/write.py, tools/utils.py
 PATTERNS: To add a tool — import its function below and append to the _fn list.
@@ -20,8 +20,8 @@ from tools.read import get_ticket, get_ticket_summary, list_tickets, search_tick
 from tools.write import (
     create_project, create_stage, create_tag, create_ticket,
     bulk_create_stages, bulk_create_tickets,
-    update_ticket, transition_stage, add_subtasks, add_comment, delete_ticket,
-    attach_file,
+    update_ticket, transition_stage, add_subtasks, add_comment, post_log_note,
+    delete_ticket, attach_file,
 )
 from tools.utils import list_metadata
 
@@ -42,6 +42,7 @@ for _fn in [
     transition_stage,
     add_subtasks,
     add_comment,
+    post_log_note,
     delete_ticket,
     attach_file,
     list_metadata,

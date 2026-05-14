@@ -19,7 +19,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 
 ---
 
-## Available Tools (19)
+## Available Tools (20)
 
 ### Read Tools
 
@@ -45,7 +45,8 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | `update_ticket` | Patch-update any ticket field | `ticket_id`, `title`, `description`, `stage_id`, `assignee_ids`, `priority`, `deadline` |
 | `transition_stage` | Move a ticket to a stage by name | `ticket_id`, `stage_name` |
 | `add_subtasks` | Add child tasks to an existing ticket | `ticket_id`, `subtasks` (list of strings) |
-| `add_comment` | Post a message to the ticket chatter | `ticket_id`, `body` |
+| `add_comment` | Post a public message to the ticket chatter — notifies followers | `ticket_id`, `body` |
+| `post_log_note` | Post an internal log note — visible to internal users only, no notifications | `ticket_id`, `body` |
 | `attach_file` | Attach a file to a ticket (auto-detects mimetype) | `ticket_id`, `filename`, `content`, `mimetype` |
 | `delete_ticket` | Permanently delete a task | `ticket_id` |
 
@@ -149,7 +150,7 @@ Open `.claude/settings.json` (create if it doesn't exist) and add:
 
 `Ctrl+Shift+P` → **Developer: Reload Window**
 
-The MCP server will start automatically and all 19 tools will be available in your Claude session.
+The MCP server will start automatically and all 20 tools will be available in your Claude session.
 
 ---
 
@@ -273,7 +274,7 @@ Key optimizations built in:
 
 ```bash
 venv/Scripts/python.exe -m pytest tests/ -v
-# 42 tests, all should pass
+# 44 tests, all should pass
 ```
 
 ---
@@ -282,7 +283,7 @@ venv/Scripts/python.exe -m pytest tests/ -v
 
 ```
 odoo_mcp/
-├── server.py              # FastMCP server — registers all 19 tools
+├── server.py              # FastMCP server — registers all 20 tools
 ├── odoo_client.py         # XML-RPC client, md→HTML conversion, helpers
 ├── cache.py               # In-memory TTL cache
 ├── requirements.txt       # Dependencies

@@ -254,10 +254,23 @@ async def add_comment(
     body: str,
     model: str = "project.task",
 ) -> dict:
-    """Post a chatter message on a ticket. Returns {ticket_id, message_id}."""
+    """Post a public chatter message on a ticket. Notifies followers. Returns {ticket_id, message_id}."""
     message_id: int = await client._rpc(
         model, "message_post", [[ticket_id]],
         {"body": body, "message_type": "comment", "subtype_xmlid": "mail.mt_comment"},
+    )
+    return {"ticket_id": ticket_id, "message_id": message_id}
+
+
+async def post_log_note(
+    ticket_id: int,
+    body: str,
+    model: str = "project.task",
+) -> dict:
+    """Post an internal log note on a ticket. Visible to internal users only — does NOT notify followers. Returns {ticket_id, message_id}."""
+    message_id: int = await client._rpc(
+        model, "message_post", [[ticket_id]],
+        {"body": body, "message_type": "comment", "subtype_xmlid": "mail.mt_note"},
     )
     return {"ticket_id": ticket_id, "message_id": message_id}
 
