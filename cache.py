@@ -1,3 +1,10 @@
+"""
+PURPOSE: Thread-safe in-memory TTL cache shared across all tools.
+EXPORTS: cache (singleton CacheLayer), TTL_TICKET, TTL_LIST, TTL_META, TTL_USERS
+DEPENDS ON: stdlib only (threading, time)
+PATTERNS: cache.get(key) → cache.set(key, val, TTL_X) | cache.invalidate_prefix("ticket:")
+DO NOT USE FOR: persistent storage — cache is in-memory and resets on server restart.
+"""
 import threading
 import time
 from typing import Any

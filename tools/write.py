@@ -1,3 +1,12 @@
+"""
+PURPOSE: Ten write/mutation MCP tools for creating, updating, and deleting Odoo tasks.
+EXPORTS: create_project, create_stage, create_tag, create_ticket, bulk_create_stages, bulk_create_tickets, update_ticket, transition_stage, add_subtasks, add_comment, delete_ticket
+DEPENDS ON: cache.py (cache), odoo_client.py (client), tools/read.py (get_ticket — imported lazily to avoid circular import)
+PATTERNS: Call _rpc() then invalidate_prefix() on affected cache keys. Markdown descriptions auto-converted via client.md_to_html(). Many2many writes use Odoo command [(6, 0, id_list)].
+DO NOT USE FOR: read-only queries — use tools/read.py instead.
+"""
+import base64
+import mimetypes
 from datetime import datetime
 
 from cache import cache
@@ -77,7 +86,7 @@ async def create_ticket(
         _validate_date(deadline)
     vals: dict = {"name": title, "project_id": project_id, "priority": priority}
     if description is not None:
-        vals["description"] = client.md_to_html(description)
+        vals["description"] = description if description.strip().startswith("<") else client.md_to_html(description)
     if stage_id is not None:
         vals["stage_id"] = stage_id
     if assignee_ids:
@@ -210,7 +219,7 @@ async def update_ticket(
     if title is not None:
         vals["name"] = title
     if description is not None:
-        vals["description"] = client.md_to_html(description)
+        vals["description"] = description if description.strip().startswith("<") else client.md_to_html(description)
     if stage_id is not None:
         vals["stage_id"] = stage_id
     if assignee_ids is not None:
@@ -227,6 +236,50 @@ async def update_ticket(
     cache.invalidate_prefix(f"ticket:{model}:{ticket_id}:")
     cache.invalidate_prefix(f"list:{model}")
     return await get_ticket(ticket_id, detail=True, model=model)
+
+
+async def delete_ticket(
+    ticket_id: int,
+    model: str = "project.task",
+) -> dict:
+    """Permanently delete a task by ID. Returns {ticket_id, deleted}."""
+    await client._rpc(model, "unlink", [[ticket_id]])
+    cache.invalidate_prefix(f"ticket:{model}:{ticket_id}:")
+    cache.invalidate_prefix(f"list:{model}")
+    return {"ticket_id": ticket_id, "deleted": True}
+
+
+async def add_comment(
+    ticket_id: int,
+    body: str,
+    model: str = "project.task",
+) -> dict:
+    """Post a chatter message on a ticket. Returns {ticket_id, message_id}."""
+    message_id: int = await client._rpc(
+        model, "message_post", [[ticket_id]],
+        {"body": body, "message_type": "comment", "subtype_xmlid": "mail.mt_comment"},
+    )
+    return {"ticket_id": ticket_id, "message_id": message_id}
+
+
+async def attach_file(
+    ticket_id: int,
+    filename: str,
+    content: str,
+    mimetype: str | None = None,
+    model: str = "project.task",
+) -> dict:
+    """Attach a file to a ticket. Auto-detects mimetype from filename extension if not supplied."""
+    resolved_mimetype = mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    att_id: int = await client._rpc("ir.attachment", "create", [{
+        "name": filename,
+        "datas": encoded,
+        "res_model": model,
+        "res_id": ticket_id,
+        "mimetype": resolved_mimetype,
+    }])
+    return {"attachment_id": att_id, "filename": filename, "ticket_id": ticket_id, "mimetype": resolved_mimetype}
 
 
 async def transition_stage(
@@ -255,4 +308,16 @@ async def transition_stage(
         names = ", ".join(s["name"] for s in stages)
         raise ValueError(f"Ambiguous stage name — matches: {names}")
 
-    return await update_ticket(ticket_id, stage_id=stages[0]["id"], model=model)
+    result = await update_ticket(ticket_id, stage_id=stages[0]["id"], model=model)
+    stage_lower = stage_name.lower()
+    if stage_lower == "done":
+        result["context_hint"] = (
+            f"Ticket moved to Done. Run /ticket-context {ticket_id} in Claude Code "
+            "to generate and attach the handoff context file."
+        )
+    elif "progress" in stage_lower:
+        result["context_hint"] = (
+            f"Ticket is now In Progress. Run /ticket-context {ticket_id} in Claude Code "
+            "to attach any design specs, API contracts, or planning docs before you start."
+        )
+    return result

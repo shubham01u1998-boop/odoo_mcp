@@ -1,3 +1,10 @@
+"""
+PURPOSE: Single MCP tool for listing Odoo reference data (projects, stages, users, tags).
+EXPORTS: list_metadata
+DEPENDS ON: cache.py (cache, TTL_META, TTL_USERS), odoo_client.py (client)
+PATTERNS: Long TTLs (TTL_META=600s, TTL_USERS=300s) — metadata changes rarely. Cache key includes project_id for stage/tag filtering.
+DO NOT USE FOR: task-level data — use tools/read.py for ticket queries.
+"""
 from cache import TTL_META, TTL_USERS, cache
 from odoo_client import client
 

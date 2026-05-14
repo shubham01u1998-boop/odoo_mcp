@@ -1,6 +1,9 @@
 """
-32 tests — no live Odoo required. All XML-RPC calls are mocked.
-Run from the odoo-mcp/ directory:  pytest tests/test_mcp.py -v
+PURPOSE: 38 unit tests covering cache, client helpers, and all 15 MCP tools. No live Odoo required.
+EXPORTS: pytest test suite — run with: pytest tests/test_mcp.py -v (from odoo-mcp/)
+DEPENDS ON: cache.py, odoo_client.py, tools/ (read, write, utils), unittest.mock
+PATTERNS: _fresh_modules() returns isolated module instances with a clean in-memory cache. mock_rpc_sync(value) patches XML-RPC at the transport level. All async tool tests use @pytest.mark.asyncio.
+DO NOT USE FOR: integration testing against live Odoo — all RPC calls are fully mocked.
 """
 import asyncio
 import os
@@ -538,3 +541,73 @@ def test_build_url_with_and_without_project():
     c = make_client()
     assert c.build_url(42, project_id=1) == "https://odoo.example.com/odoo/project/1/task/42"
     assert c.build_url(42) == "https://odoo.example.com/odoo/tasks/42"
+
+
+# ===========================================================================
+# ATTACH FILE TESTS
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_attach_file_markdown():
+    _, write_mod, _ = _fresh_modules()
+    with mock_rpc_sync(99):
+        result = await write_mod.attach_file(
+            ticket_id=1,
+            filename="login_context.md",
+            content="# API\nPOST /api/login",
+        )
+    assert result["attachment_id"] == 99
+    assert result["filename"] == "login_context.md"
+    assert result["ticket_id"] == 1
+    assert result["mimetype"] == "text/markdown"
+
+
+@pytest.mark.asyncio
+async def test_attach_file_custom_mimetype():
+    _, write_mod, _ = _fresh_modules()
+    with mock_rpc_sync(101):
+        result = await write_mod.attach_file(
+            ticket_id=5,
+            filename="spec.pdf",
+            content="binary-ish content",
+            mimetype="application/pdf",
+        )
+    assert result["attachment_id"] == 101
+    assert result["mimetype"] == "application/pdf"
+
+
+# ===========================================================================
+# ATTACHMENT READ TESTS
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_list_attachments_returns_metadata():
+    from tools.read import list_attachments
+    att_records = [
+        {"id": 1454, "name": "migrate-payment-gateway-to-stripe_context.md",
+         "mimetype": "text/markdown", "file_size": 512, "create_date": "2026-05-13 10:00:00"},
+    ]
+    with mock_rpc_sync(att_records):
+        result = await list_attachments(2551)
+    assert len(result) == 1
+    assert result[0]["id"] == 1454
+    assert result[0]["filename"] == "migrate-payment-gateway-to-stripe_context.md"
+    assert result[0]["mimetype"] == "text/markdown"
+    assert result[0]["size"] == 512
+
+
+@pytest.mark.asyncio
+async def test_get_attachment_decodes_content():
+    import base64
+    from tools.read import get_attachment
+    raw = "# Migrate payment gateway to Stripe — Checkpoint\n_Ticket #2551_"
+    encoded = base64.b64encode(raw.encode()).decode()
+    att_record = [
+        {"id": 1454, "name": "migrate-payment-gateway-to-stripe_context.md",
+         "datas": encoded, "mimetype": "text/markdown", "file_size": len(raw), "res_id": 2551},
+    ]
+    with mock_rpc_sync(att_record):
+        result = await get_attachment(1454)
+    assert result["id"] == 1454
+    assert result["ticket_id"] == 2551
+    assert result["content"].startswith("# Migrate payment gateway")

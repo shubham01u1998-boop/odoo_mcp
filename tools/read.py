@@ -1,3 +1,10 @@
+"""
+PURPOSE: Six read-only MCP tools for fetching and searching Odoo project tasks and attachments.
+EXPORTS: get_ticket, list_tickets, get_ticket_summary, search_tickets, list_attachments, get_attachment
+DEPENDS ON: cache.py (cache, TTL_TICKET, TTL_LIST), odoo_client.py (client)
+PATTERNS: Cache-first reads — check cache.get() before calling _rpc(); shape responses with _build_envelope(). _search_and_count() runs search_read + search_count in parallel.
+DO NOT USE FOR: mutations — any write belongs in tools/write.py.
+"""
 from cache import TTL_LIST, TTL_TICKET, cache
 from odoo_client import client
 
@@ -135,6 +142,52 @@ async def search_tickets(
         "limit": limit,
         "offset": 0,
         "has_more": len(tickets) < total,
+    }
+
+
+async def list_attachments(
+    ticket_id: int,
+    model: str = "project.task",
+) -> list[dict]:
+    """List all files attached to a ticket. Returns [{id, filename, mimetype, size, created_at}]."""
+    records = await client._rpc(
+        "ir.attachment",
+        "search_read",
+        [[["res_model", "=", model], ["res_id", "=", ticket_id]]],
+        {"fields": ["id", "name", "mimetype", "file_size", "create_date"]},
+    )
+    return [
+        {
+            "id": r["id"],
+            "filename": r["name"],
+            "mimetype": r["mimetype"],
+            "size": r.get("file_size"),
+            "created_at": r.get("create_date"),
+        }
+        for r in records
+    ]
+
+
+async def get_attachment(attachment_id: int) -> dict:
+    """Fetch the decoded text content of an attachment by ID. Use list_attachments first to find the ID."""
+    import base64
+    records = await client._rpc(
+        "ir.attachment",
+        "read",
+        [[attachment_id]],
+        {"fields": ["id", "name", "datas", "mimetype", "file_size", "res_id"]},
+    )
+    if not records:
+        raise ValueError(f"Attachment {attachment_id} not found")
+    r = records[0]
+    raw = base64.b64decode(r["datas"]).decode("utf-8", errors="replace") if r.get("datas") else ""
+    return {
+        "id": r["id"],
+        "filename": r["name"],
+        "mimetype": r["mimetype"],
+        "size": r.get("file_size"),
+        "ticket_id": r["res_id"],
+        "content": raw,
     }
 
 

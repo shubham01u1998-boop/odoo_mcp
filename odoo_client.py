@@ -1,3 +1,10 @@
+"""
+PURPOSE: XML-RPC transport layer and HTML/Markdown helpers for Odoo 19.
+EXPORTS: client (singleton OdooClient), methods: _rpc, md_to_html, strip_html, flatten_many2one, flatten_many2many, build_url
+DEPENDS ON: stdlib (xmlrpc, asyncio, html, re, os), markdown
+PATTERNS: await client._rpc(model, method, args, kwargs) — always async; runs sync XML-RPC in thread pool via asyncio.to_thread().
+DO NOT USE FOR: caching — handle cache hits/misses in tools/ before calling _rpc().
+"""
 import asyncio
 import html
 import os
@@ -42,9 +49,16 @@ class OdooClient:
 
     @staticmethod
     def md_to_html(text: str) -> str:
-        if not text:
-            return ""
-        return _md.markdown(text, extensions=["nl2br", "sane_lists"])
+        """Convert plain text to Odoo 19 HTML. Only called for non-HTML input."""
+        if not text or not text.strip():
+            return '<p> </p>'
+        paragraphs = text.split('\n\n')
+        result = []
+        for para in paragraphs:
+            if para.strip():
+                lines = para.strip().split('\n')
+                result.append('<p>' + '<br/>'.join(lines) + '</p>')
+        return ''.join(result) if result else '<p> </p>'
 
     @staticmethod
     def strip_html(text: str) -> str:
