@@ -17,7 +17,7 @@ Exposes 15 tools for reading, creating, updating, and deleting project tasks.
 | `tools/utils.py` | 1 metadata tool: list_metadata | Changing metadata queries |
 | `tests/test_mcp.py` | 38 unit tests (fully mocked, no live Odoo) | After any tool change |
 
-**Never need to read:** `venv/`, `.git/`, `migrate_descriptions.py` (one-off migration script, not part of the live server)
+**Never need to read:** `venv/`, `.git/`
 
 ---
 

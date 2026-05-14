@@ -288,7 +288,6 @@ odoo_mcp/
 ├── requirements.txt       # Dependencies
 ├── .env.example           # Credential template (copy to .env)
 ├── CLAUDE.md              # Navigation guide for Claude Code
-├── migrate_descriptions.py # One-off script: re-renders existing ticket descriptions as HTML
 ├── docs/
 │   └── function_index.md  # Auto-generated tool reference (run scripts/gen_index.py)
 ├── scripts/
