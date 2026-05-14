@@ -1,6 +1,6 @@
 # Odoo MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects **Claude Code / Claude Desktop** directly to **Odoo 19 Enterprise**. Lets any developer or QA engineer read tickets, create projects, manage stages, assign tasks, and scaffold entire sprints — all through natural language inside the IDE, with no Odoo UI required.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects **Claude Code / Claude Desktop** directly to **Odoo 19 Enterprise**. Lets any developer or QA engineer read tickets, create projects, manage stages, assign tasks, scaffold entire sprints, and attach handoff context files — all through natural language inside the IDE, with no Odoo UI required.
 
 ---
 
@@ -12,11 +12,14 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | **Write** | Create projects (with auto-stages), stages, tags, tickets, subtasks |
 | **Bulk** | Scaffold a full sprint board in one call (bulk stages + bulk tickets) |
 | **Update** | Patch any ticket field, move tickets between stages by name |
+| **Chatter** | Post comments to the ticket message thread |
+| **Attachments** | Attach files to tickets, list attachments, read attachment content |
 | **Metadata** | List all projects, stages, users, and tags from Odoo |
+| **Delete** | Permanently delete a task by ID |
 
 ---
 
-## Available Tools (14)
+## Available Tools (19)
 
 ### Read Tools
 
@@ -26,6 +29,8 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | `list_tickets` | List tasks with optional filters | `project_id`, `stage`, `tag`, `assigned_to`, `priority`, `limit`, `offset` |
 | `get_ticket_summary` | One-liner summary per ticket (most token-efficient) | `ticket_ids` (list of up to 100 IDs) |
 | `search_tickets` | Full-text search across title + description | `query`, `project_id`, `limit` |
+| `list_attachments` | List all files attached to a ticket | `ticket_id` |
+| `get_attachment` | Fetch and decode the content of an attachment | `attachment_id` |
 
 ### Write Tools
 
@@ -40,6 +45,9 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | `update_ticket` | Patch-update any ticket field | `ticket_id`, `title`, `description`, `stage_id`, `assignee_ids`, `priority`, `deadline` |
 | `transition_stage` | Move a ticket to a stage by name | `ticket_id`, `stage_name` |
 | `add_subtasks` | Add child tasks to an existing ticket | `ticket_id`, `subtasks` (list of strings) |
+| `add_comment` | Post a message to the ticket chatter | `ticket_id`, `body` |
+| `attach_file` | Attach a file to a ticket (auto-detects mimetype) | `ticket_id`, `filename`, `content`, `mimetype` |
+| `delete_ticket` | Permanently delete a task | `ticket_id` |
 
 ### Utility Tools
 
@@ -141,7 +149,7 @@ Open `.claude/settings.json` (create if it doesn't exist) and add:
 
 `Ctrl+Shift+P` → **Developer: Reload Window**
 
-The MCP server will start automatically and the 14 tools will be available in your Claude session.
+The MCP server will start automatically and all 19 tools will be available in your Claude session.
 
 ---
 
@@ -204,6 +212,29 @@ Move ticket 2315 to the "In Progress" stage
 Add subtasks to ticket 2315: "Write unit tests", "Code review", "Deploy to staging"
 ```
 
+### Post a comment
+```
+Add a comment to ticket 2315: "Blocked on design approval — pinging Sahil"
+```
+
+### Attach a context file
+```
+Attach this spec to ticket 2315
+```
+
+### List and read attachments
+```
+What files are attached to ticket 2315?
+```
+```
+Read the context file attached to ticket 2315
+```
+
+### Delete a ticket
+```
+Delete ticket 2399
+```
+
 ### Bulk create tickets with subtasks
 ```json
 bulk_create_tickets([
@@ -242,7 +273,7 @@ Key optimizations built in:
 
 ```bash
 venv/Scripts/python.exe -m pytest tests/ -v
-# 38 tests, all should pass
+# 42 tests, all should pass
 ```
 
 ---
@@ -251,18 +282,23 @@ venv/Scripts/python.exe -m pytest tests/ -v
 
 ```
 odoo_mcp/
-├── server.py              # FastMCP server — registers all 14 tools
+├── server.py              # FastMCP server — registers all 19 tools
 ├── odoo_client.py         # XML-RPC client, md→HTML conversion, helpers
 ├── cache.py               # In-memory TTL cache
 ├── requirements.txt       # Dependencies
 ├── .env.example           # Credential template (copy to .env)
+├── CLAUDE.md              # Navigation guide for Claude Code
 ├── migrate_descriptions.py # One-off script: re-renders existing ticket descriptions as HTML
+├── docs/
+│   └── function_index.md  # Auto-generated tool reference (run scripts/gen_index.py)
+├── scripts/
+│   └── gen_index.py       # Regenerates docs/function_index.md after tool changes
 ├── tools/
-│   ├── read.py            # get_ticket, list_tickets, get_ticket_summary, search_tickets
-│   ├── write.py           # create_*, bulk_*, update_ticket, transition_stage, add_subtasks
+│   ├── read.py            # get_ticket, list_tickets, get_ticket_summary, search_tickets, list_attachments, get_attachment
+│   ├── write.py           # create_*, bulk_*, update_ticket, transition_stage, add_subtasks, add_comment, attach_file, delete_ticket
 │   └── utils.py           # list_metadata
 └── tests/
-    └── test_mcp.py        # 38 unit tests (mocked XML-RPC)
+    └── test_mcp.py        # 42 unit tests (mocked XML-RPC)
 ```
 
 ---
