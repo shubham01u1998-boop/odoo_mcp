@@ -47,7 +47,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | `add_subtasks` | Add child tasks to an existing ticket | `ticket_id`, `subtasks` (list of strings) |
 | `add_comment` | Post a public message to the ticket chatter — notifies followers | `ticket_id`, `body` |
 | `post_log_note` | Post an internal log note — visible to internal users only, no notifications | `ticket_id`, `body` |
-| `attach_file` | Attach a file to a ticket (auto-detects mimetype) | `ticket_id`, `filename`, `content`, `mimetype` |
+| `attach_file` | Attach a file to a ticket (auto-detects mimetype) | `ticket_id`, `filename`, `content`, `mimetype`, `overwrite` |
 | `delete_ticket` | Permanently delete a task | `ticket_id` |
 
 ### Utility Tools
@@ -274,7 +274,7 @@ Key optimizations built in:
 
 ```bash
 venv/Scripts/python.exe -m pytest tests/ -v
-# 44 tests, all should pass
+# 47 tests, all should pass
 ```
 
 ---
@@ -298,7 +298,7 @@ odoo_mcp/
 │   ├── write.py           # create_*, bulk_*, update_ticket, transition_stage, add_subtasks, add_comment, attach_file, delete_ticket
 │   └── utils.py           # list_metadata
 └── tests/
-    └── test_mcp.py        # 42 unit tests (mocked XML-RPC)
+    └── test_mcp.py        # 47 unit tests (mocked XML-RPC)
 ```
 
 ---

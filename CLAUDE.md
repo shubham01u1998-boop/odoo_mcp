@@ -15,7 +15,7 @@ Exposes 20 tools for reading, creating, updating, deleting, and annotating proje
 | `tools/read.py` | 4 read tools: get_ticket, list_tickets, get_ticket_summary, search_tickets | Any read-side change |
 | `tools/write.py` | 11 write tools: create/update/delete/bulk/transition/comment/log-note | Any write-side change |
 | `tools/utils.py` | 1 metadata tool: list_metadata | Changing metadata queries |
-| `tests/test_mcp.py` | 44 unit tests (fully mocked, no live Odoo) | After any tool change |
+| `tests/test_mcp.py` | 47 unit tests (fully mocked, no live Odoo) | After any tool change |
 
 **Never need to read:** `venv/`, `.git/`
 
