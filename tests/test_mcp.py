@@ -576,6 +576,56 @@ async def test_attach_file_custom_mimetype():
     assert result["mimetype"] == "application/pdf"
 
 
+@pytest.mark.asyncio
+async def test_attach_file_overwrite_replaces_existing():
+    """overwrite=True with a matching attachment → write in-place, replaced=True, same ID."""
+    _, write_mod, _ = _fresh_modules()
+    existing = [{"id": 55}]
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[existing, True]):
+        result = await write_mod.attach_file(
+            ticket_id=1,
+            filename="Backend_Handoff.md",
+            content="# Updated handoff",
+            overwrite=True,
+        )
+    assert result["attachment_id"] == 55
+    assert result["replaced"] is True
+    assert result["filename"] == "Backend_Handoff.md"
+    assert result["ticket_id"] == 1
+    assert result["mimetype"] == "text/markdown"
+
+
+@pytest.mark.asyncio
+async def test_attach_file_overwrite_creates_when_missing():
+    """overwrite=True with no existing attachment → create new record, replaced=False."""
+    _, write_mod, _ = _fresh_modules()
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[[], 99]):
+        result = await write_mod.attach_file(
+            ticket_id=1,
+            filename="Backend_Handoff.md",
+            content="# New handoff",
+            overwrite=True,
+        )
+    assert result["attachment_id"] == 99
+    assert result["replaced"] is False
+    assert result["filename"] == "Backend_Handoff.md"
+    assert result["ticket_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_attach_file_default_no_overwrite_always_creates():
+    """overwrite=False (default) always calls create, never search_read."""
+    _, write_mod, _ = _fresh_modules()
+    with mock_rpc_sync(77):
+        result = await write_mod.attach_file(
+            ticket_id=2,
+            filename="Frontend_Handoff.md",
+            content="# Frontend handoff",
+        )
+    assert result["attachment_id"] == 77
+    assert result["replaced"] is False
+
+
 # ===========================================================================
 # ATTACHMENT READ TESTS
 # ===========================================================================
