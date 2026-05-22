@@ -283,7 +283,8 @@ async def attach_file(
     overwrite: bool = False,
     model: str = "project.task",
 ) -> dict:
-    """Attach a file to a ticket. Set overwrite=True to replace an existing attachment with the same name in-place."""
+    """Attach a file to a ticket. content must be a UTF-8 text string (markdown, JSON, plain text).
+    Set overwrite=True to replace an existing attachment with the same name in-place."""
     resolved_mimetype = mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
 
