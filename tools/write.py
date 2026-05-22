@@ -280,11 +280,24 @@ async def attach_file(
     filename: str,
     content: str,
     mimetype: str | None = None,
+    overwrite: bool = False,
     model: str = "project.task",
 ) -> dict:
-    """Attach a file to a ticket. Auto-detects mimetype from filename extension if not supplied."""
+    """Attach a file to a ticket. Set overwrite=True to replace an existing attachment with the same name in-place."""
     resolved_mimetype = mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+
+    if overwrite:
+        existing = await client._rpc(
+            "ir.attachment", "search_read",
+            [[["res_model", "=", model], ["res_id", "=", ticket_id], ["name", "=", filename]]],
+            {"fields": ["id"], "limit": 1},
+        )
+        if existing:
+            att_id = existing[0]["id"]
+            await client._rpc("ir.attachment", "write", [[att_id], {"datas": encoded, "mimetype": resolved_mimetype}])
+            return {"attachment_id": att_id, "filename": filename, "ticket_id": ticket_id, "mimetype": resolved_mimetype, "replaced": True}
+
     att_id: int = await client._rpc("ir.attachment", "create", [{
         "name": filename,
         "datas": encoded,
@@ -292,7 +305,7 @@ async def attach_file(
         "res_id": ticket_id,
         "mimetype": resolved_mimetype,
     }])
-    return {"attachment_id": att_id, "filename": filename, "ticket_id": ticket_id, "mimetype": resolved_mimetype}
+    return {"attachment_id": att_id, "filename": filename, "ticket_id": ticket_id, "mimetype": resolved_mimetype, "replaced": False}
 
 
 async def transition_stage(
