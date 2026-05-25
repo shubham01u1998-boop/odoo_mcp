@@ -13,6 +13,7 @@ SCAN_FILES = [
     "tools/read.py",
     "tools/write.py",
     "tools/utils.py",
+    "tools/graph_admin.py",
 ]
 OUTPUT = ROOT / "docs" / "function_index.md"
 

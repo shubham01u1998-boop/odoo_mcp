@@ -6,11 +6,15 @@ PATTERNS: Call _rpc() then invalidate_prefix() on affected cache keys. Markdown 
 DO NOT USE FOR: read-only queries — use tools/read.py instead.
 """
 import base64
+import logging
 import mimetypes
 from datetime import datetime
 
 from cache import cache
+from graph import graph
 from odoo_client import client
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_STAGES = ["Backlog", "In Progress", "In Review", "Done"]
 
@@ -66,6 +70,14 @@ async def create_stage(
         "project.task.type", "read", [[new_id]],
         {"fields": ["id", "name", "sequence"]},
     )
+    try:
+        graph.apply_write({
+            "type": "stage_created",
+            "project_id": project_id,
+            "stage": {"id": records[0]["id"], "name": records[0]["name"], "sequence": records[0]["sequence"]},
+        })
+    except Exception as exc:
+        logger.warning("graph.apply_write stage_created failed: %s", exc)
     return {"id": records[0]["id"], "name": records[0]["name"], "sequence": records[0]["sequence"]}
 
 
@@ -103,6 +115,32 @@ async def create_ticket(
         {"fields": ["id", "name", "stage_id", "description"]},
     )
     r = records[0]
+    try:
+        graph.apply_write({
+            "type": "ticket_created",
+            "project_id": project_id,
+            "ticket": {
+                "id": r["id"],
+                "name": r["name"],
+                "stage_id": client.flatten_many2one(r.get("stage_id")),
+                "project_id": {"id": project_id, "name": graph.projects.get(project_id, {}).get("project_name", "")},
+                "user_ids": [],
+                "tag_ids": [],
+                "priority": vals.get("priority", "0"),
+                "parent_id": None,
+                "child_ids": [],
+                "description": r.get("description") or "",
+                "date_deadline": vals.get("date_deadline"),
+                "create_date": "",
+                "write_date": "",
+                "attachment_count": 0,
+                "comment_count": 0,
+                "log_note_count": 0,
+                "stale": False,
+            },
+        })
+    except Exception as exc:
+        logger.warning("graph.apply_write ticket_created failed: %s", exc)
     raw_desc = client.strip_html(r.get("description") or "")
     result = {
         "id": r["id"],
@@ -144,6 +182,10 @@ async def create_tag(name: str) -> dict:
     records = await client._rpc(
         "project.tags", "read", [[new_id]], {"fields": ["id", "name"]}
     )
+    try:
+        graph.apply_write({"type": "tag_created", "tag": {"id": records[0]["id"], "name": records[0]["name"]}})
+    except Exception as exc:
+        logger.warning("graph.apply_write tag_created failed: %s", exc)
     return {"id": records[0]["id"], "name": records[0]["name"]}
 
 
@@ -167,6 +209,49 @@ async def add_subtasks(
         subtask_ids.append(sub_id)
 
     cache.invalidate_prefix(f"ticket:{model}:{ticket_id}:")
+    try:
+        _pid = None
+        for pid, sub in graph.projects.items():
+            if ticket_id in sub["tickets"]:
+                _pid = pid
+                break
+        if _pid is not None:
+            for sub_id, subtask_name in zip(subtask_ids, subtasks):
+                graph.apply_write({
+                    "type": "ticket_created",
+                    "project_id": _pid,
+                    "ticket": {
+                        "id": sub_id,
+                        "name": subtask_name,
+                        "stage_id": None,
+                        "project_id": {"id": project_id, "name": graph.projects.get(project_id, {}).get("project_name", "")},
+                        "user_ids": [],
+                        "tag_ids": [],
+                        "priority": "0",
+                        "parent_id": ticket_id,
+                        "child_ids": [],
+                        "description": "",
+                        "date_deadline": None,
+                        "create_date": "",
+                        "write_date": "",
+                        "attachment_count": 0,
+                        "comment_count": 0,
+                        "log_note_count": 0,
+                        "stale": False,
+                    },
+                })
+            # Update parent's child_ids
+            parent = graph.projects[_pid]["tickets"].get(ticket_id)
+            if parent is not None:
+                new_child_ids = parent.get("child_ids", []) + subtask_ids
+                graph.apply_write({
+                    "type": "child_ids_changed",
+                    "project_id": _pid,
+                    "ticket_id": ticket_id,
+                    "child_ids": new_child_ids,
+                })
+    except Exception as exc:
+        logger.warning("graph.apply_write add_subtasks failed: %s", exc)
     return {"ticket_id": ticket_id, "created": len(subtask_ids), "subtask_ids": subtask_ids}
 
 
@@ -233,6 +318,52 @@ async def update_ticket(
         raise ValueError("No fields to update — pass at least one parameter")
 
     await client._rpc(model, "write", [[ticket_id], vals])
+    try:
+        _pid = None
+        sub = None
+        for pid, s in graph.projects.items():
+            if ticket_id in s["tickets"]:
+                _pid = pid
+                sub = s
+                break
+        if _pid is not None:
+            graph_fields = {}
+            if "name" in vals:
+                graph_fields["name"] = vals["name"]
+            if "description" in vals:
+                graph_fields["description"] = vals["description"]
+            if "stage_id" in vals:
+                sid = vals["stage_id"]
+                stage_entry = sub["stages"].get(sid) if sub else None
+                if stage_entry:
+                    graph_fields["stage_id"] = {"id": sid, "name": stage_entry["name"]}
+                else:
+                    # Stage not in graph yet — store with empty name and mark ticket stale
+                    graph_fields["stage_id"] = {"id": sid, "name": ""}
+                    # Mark the ticket stale so next read triggers a refresh
+                    for pid, s in graph.projects.items():
+                        t = s["tickets"].get(ticket_id)
+                        if t is not None:
+                            t["stale"] = True
+                            break
+            if "user_ids" in vals:
+                cmd = vals["user_ids"]
+                if cmd and isinstance(cmd[0], (list, tuple)) and cmd[0][0] == 6:
+                    uid_list = cmd[0][2]
+                    graph_fields["user_ids"] = [{"id": u, "name": graph.users.get(u, {}).get("name", str(u))} for u in uid_list]
+            if "priority" in vals:
+                graph_fields["priority"] = vals["priority"]
+            if "date_deadline" in vals:
+                graph_fields["date_deadline"] = vals["date_deadline"]
+            if graph_fields:
+                graph.apply_write({
+                    "type": "ticket_updated",
+                    "project_id": _pid,
+                    "ticket_id": ticket_id,
+                    "fields": graph_fields,
+                })
+    except Exception as exc:
+        logger.warning("graph.apply_write ticket_updated failed: %s", exc)
     cache.invalidate_prefix(f"ticket:{model}:{ticket_id}:")
     cache.invalidate_prefix(f"list:{model}")
     return await get_ticket(ticket_id, detail=True, model=model)
@@ -244,6 +375,12 @@ async def delete_ticket(
 ) -> dict:
     """Permanently delete a task by ID. Returns {ticket_id, deleted}."""
     await client._rpc(model, "unlink", [[ticket_id]])
+    try:
+        _pid = next((pid for pid, sub in graph.projects.items() if ticket_id in sub["tickets"]), None)
+        if _pid is not None:
+            graph.apply_write({"type": "ticket_deleted", "project_id": _pid, "ticket_id": ticket_id})
+    except Exception as exc:
+        logger.warning("graph.apply_write ticket_deleted failed: %s", exc)
     cache.invalidate_prefix(f"ticket:{model}:{ticket_id}:")
     cache.invalidate_prefix(f"list:{model}")
     return {"ticket_id": ticket_id, "deleted": True}
@@ -259,6 +396,12 @@ async def add_comment(
         model, "message_post", [[ticket_id]],
         {"body": body, "message_type": "comment", "subtype_xmlid": "mail.mt_comment"},
     )
+    try:
+        _pid = next((pid for pid, sub in graph.projects.items() if ticket_id in sub["tickets"]), None)
+        if _pid is not None:
+            graph.apply_write({"type": "comment_added", "project_id": _pid, "ticket_id": ticket_id})
+    except Exception as exc:
+        logger.warning("graph.apply_write comment_added failed: %s", exc)
     return {"ticket_id": ticket_id, "message_id": message_id}
 
 
@@ -272,6 +415,12 @@ async def post_log_note(
         model, "message_post", [[ticket_id]],
         {"body": body, "message_type": "comment", "subtype_xmlid": "mail.mt_note"},
     )
+    try:
+        _pid = next((pid for pid, sub in graph.projects.items() if ticket_id in sub["tickets"]), None)
+        if _pid is not None:
+            graph.apply_write({"type": "log_note_added", "project_id": _pid, "ticket_id": ticket_id})
+    except Exception as exc:
+        logger.warning("graph.apply_write log_note_added failed: %s", exc)
     return {"ticket_id": ticket_id, "message_id": message_id}
 
 
@@ -297,6 +446,12 @@ async def attach_file(
         if existing:
             att_id = existing[0]["id"]
             await client._rpc("ir.attachment", "write", [[att_id], {"datas": encoded, "mimetype": resolved_mimetype}])
+            try:
+                _pid = next((pid for pid, sub in graph.projects.items() if ticket_id in sub["tickets"]), None)
+                if _pid is not None:
+                    graph.apply_write({"type": "attachment_overwritten", "project_id": _pid, "ticket_id": ticket_id})
+            except Exception as exc:
+                logger.warning("graph.apply_write attachment_overwritten failed: %s", exc)
             return {"attachment_id": att_id, "filename": filename, "ticket_id": ticket_id, "mimetype": resolved_mimetype, "replaced": True}
 
     att_id: int = await client._rpc("ir.attachment", "create", [{
@@ -306,6 +461,12 @@ async def attach_file(
         "res_id": ticket_id,
         "mimetype": resolved_mimetype,
     }])
+    try:
+        _pid = next((pid for pid, sub in graph.projects.items() if ticket_id in sub["tickets"]), None)
+        if _pid is not None:
+            graph.apply_write({"type": "attachment_added", "project_id": _pid, "ticket_id": ticket_id})
+    except Exception as exc:
+        logger.warning("graph.apply_write attachment_added failed: %s", exc)
     return {"attachment_id": att_id, "filename": filename, "ticket_id": ticket_id, "mimetype": resolved_mimetype, "replaced": False}
 
 

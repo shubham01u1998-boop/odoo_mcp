@@ -1,6 +1,6 @@
 # Odoo MCP Server
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects **Claude Code / Claude Desktop** directly to **Odoo 19 Enterprise**. Lets any developer or QA engineer read tickets, create projects, manage stages, assign tasks, scaffold entire sprints, and attach handoff context files — all through natural language inside the IDE, with no Odoo UI required.
+A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that connects **Claude Code / Claude Desktop** directly to **Odoo 19 Enterprise**. Lets any developer or QA engineer read tickets, create projects, manage stages, assign tasks, scaffold entire sprints, attach handoff context files, and query an in-memory project graph — all through natural language inside the IDE, with no Odoo UI required.
 
 ---
 
@@ -12,23 +12,24 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | **Write** | Create projects (with auto-stages), stages, tags, tickets, subtasks |
 | **Bulk** | Scaffold a full sprint board in one call (bulk stages + bulk tickets) |
 | **Update** | Patch any ticket field, move tickets between stages by name |
-| **Chatter** | Post comments to the ticket message thread |
+| **Chatter** | Post public comments or internal log notes to the ticket chatter |
 | **Attachments** | Attach files to tickets, list attachments, read attachment content |
 | **Metadata** | List all projects, stages, users, and tags from Odoo |
 | **Delete** | Permanently delete a task by ID |
+| **Graph Cache** | Hydrate a project into an in-memory graph for zero-RPC reads; delta-sync on demand; persist across restarts |
 
 ---
 
-## Available Tools (20)
+## Available Tools (25)
 
 ### Read Tools
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `get_ticket` | Fetch a single task by ID | `ticket_id`, `detail` (bool — includes description, subtask count, dates) |
-| `list_tickets` | List tasks with optional filters | `project_id`, `stage`, `tag`, `assigned_to`, `priority`, `limit`, `offset` |
+| `get_ticket` | Fetch a single task by ID | `ticket_id`, `detail` (bool — includes description, subtask count, dates), `fresh` (bool — bypass graph, force RPC) |
+| `list_tickets` | List tasks with optional filters | `project_id`, `stage`, `tag`, `assigned_to`, `priority`, `limit`, `offset`, `fresh` |
 | `get_ticket_summary` | One-liner summary per ticket (most token-efficient) | `ticket_ids` (list of up to 100 IDs) |
-| `search_tickets` | Full-text search across title + description | `query`, `project_id`, `limit` |
+| `search_tickets` | Full-text search across title + description | `query`, `project_id`, `limit`, `fresh` |
 | `list_attachments` | List all files attached to a ticket | `ticket_id` |
 | `get_attachment` | Fetch and decode the content of an attachment | `attachment_id` |
 
@@ -55,6 +56,53 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that co
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list_metadata` | List projects, stages, users, or tags | `resource` (`projects` \| `stages` \| `users` \| `tags`), `project_id` (filters stages) |
+
+### Graph Admin Tools
+
+| Tool | Description | Key Parameters |
+|------|-------------|----------------|
+| `add_project_to_graph` | Hydrate a project from Odoo into the in-memory graph (9 RPCs, ~1-2 s, idempotent) | `project_id` |
+| `remove_project_from_graph` | Drop a project from the graph and free memory | `project_id` |
+| `list_active_projects` | List all projects currently loaded in the graph with ticket counts | — |
+| `refresh_project_graph` | Delta sync: fetch only tickets changed since last sync, detect deletions (2 RPCs) | `project_id` |
+| `view_graph` | Render the graph as ASCII tree, Mermaid diagram, or JSON snapshot | `project_id`, `format` (`tree` \| `mermaid` \| `json`) |
+
+---
+
+## Graph Cache
+
+The graph cache stores a full **ProjectSubgraph** per active project in memory — all tickets with their relationships, stage assignments, assignees, tags, and counts — giving **O(1) reads with zero RPC round-trips**.
+
+### How it works
+
+- **Reads** (`get_ticket`, `list_tickets`, `search_tickets`, `list_metadata`) check the graph first. If the project is loaded, data is returned immediately from memory. If not, the tool falls back to a live RPC call and returns a hint to call `add_project_to_graph`.
+- **Writes** update Odoo first, then patch the in-memory graph automatically (best-effort — a patch failure never blocks the write).
+- **Disk snapshots** are saved to `.odoo-mcp-graph/projects/<id>.json` after every hydration or refresh (gitignored, written atomically). The graph reloads automatically on MCP server restart — no re-hydration needed.
+
+### Recommended session startup
+
+```
+add_project_to_graph(project_id=58)
+```
+
+One call, ~1-2 seconds. After that, all read tools serve from memory for the rest of the session.
+
+### On-demand refresh
+
+If colleagues edit tickets via the Odoo UI while you work:
+
+```
+refresh_project_graph(project_id=58)   # fetches only what changed — 2 RPCs
+get_ticket(ticket_id=2315, fresh=True)  # re-fetch a single ticket — 1 RPC
+```
+
+### Team workflow (no shared server)
+
+The `.odoo-mcp-graph/` folder is gitignored by default. Two options for sharing graph snapshots across the team:
+
+**Option A — Commit the snapshots (simplest):** Remove `.odoo-mcp-graph/` from `.gitignore`. One dev refreshes and commits; others get the snapshot via `git pull`.
+
+**Option B — Each dev hydrates on demand:** Run `add_project_to_graph` once after cloning. Takes ~1-2 s per project and always pulls the latest data from Odoo.
 
 ---
 
@@ -150,7 +198,7 @@ Open `.claude/settings.json` (create if it doesn't exist) and add:
 
 `Ctrl+Shift+P` → **Developer: Reload Window**
 
-The MCP server will start automatically and all 20 tools will be available in your Claude session.
+The MCP server will start automatically and all 25 tools will be available in your Claude session.
 
 ---
 
@@ -249,6 +297,21 @@ bulk_create_tickets([
 ], project_id=58)
 ```
 
+### Load a project into the graph cache
+```
+add_project_to_graph(project_id=58)
+```
+
+### View the project as a tree
+```
+view_graph(project_id=58, format="tree")
+```
+
+### Refresh after teammates edit tickets
+```
+refresh_project_graph(project_id=58)
+```
+
 ---
 
 ## Token Optimization
@@ -259,14 +322,15 @@ This server is designed to minimize token consumption per operation:
 |----------|-------|-------------|
 | Naive (26 tickets individually) | ~39 calls | ~35,000 |
 | Optimized (bulk + list_metadata) | ~10 calls | ~8,600 |
-| **Saving** | **29 fewer calls** | **~75% reduction** |
+| **Graph cache (project loaded)** | **0 calls** | **~2,000** |
 
 Key optimizations built in:
+- **Graph cache** — after one `add_project_to_graph` call, all reads cost zero RPCs for the rest of the session
 - `list_metadata` replaces 4 separate list tools
 - `create_project` auto-creates stages in one call
 - `bulk_create_tickets` replaces N individual create calls
 - Slim `create_ticket` response (no redundant second RPC)
-- In-memory cache with TTL for metadata (10 min) and ticket reads (1 min)
+- In-memory TTL cache for metadata (10 min) and ticket reads (1 min)
 
 ---
 
@@ -274,7 +338,7 @@ Key optimizations built in:
 
 ```bash
 venv/Scripts/python.exe -m pytest tests/ -v
-# 47 tests, all should pass
+# 110 tests, all should pass
 ```
 
 ---
@@ -283,9 +347,10 @@ venv/Scripts/python.exe -m pytest tests/ -v
 
 ```
 odoo_mcp/
-├── server.py              # FastMCP server — registers all 20 tools
+├── server.py              # FastMCP server — registers all 25 tools
 ├── odoo_client.py         # XML-RPC client, md→HTML conversion, helpers
 ├── cache.py               # In-memory TTL cache
+├── graph.py               # In-memory project graph cache with disk persistence
 ├── requirements.txt       # Dependencies
 ├── .env.example           # Credential template (copy to .env)
 ├── CLAUDE.md              # Navigation guide for Claude Code
@@ -295,10 +360,15 @@ odoo_mcp/
 │   └── gen_index.py       # Regenerates docs/function_index.md after tool changes
 ├── tools/
 │   ├── read.py            # get_ticket, list_tickets, get_ticket_summary, search_tickets, list_attachments, get_attachment
-│   ├── write.py           # create_*, bulk_*, update_ticket, transition_stage, add_subtasks, add_comment, attach_file, delete_ticket
-│   └── utils.py           # list_metadata
-└── tests/
-    └── test_mcp.py        # 47 unit tests (mocked XML-RPC)
+│   ├── write.py           # create_*, bulk_*, update_ticket, transition_stage, add_subtasks, add_comment, post_log_note, attach_file, delete_ticket
+│   ├── utils.py           # list_metadata
+│   └── graph_admin.py     # add/remove/refresh/list/view graph tools
+├── tests/
+│   └── test_mcp.py        # 110 unit tests (mocked XML-RPC, no live Odoo needed)
+└── .odoo-mcp-graph/       # gitignored — graph snapshots written here automatically
+    ├── _meta.json         # shared users + tags dictionary
+    └── projects/
+        └── <id>.json      # one file per active project
 ```
 
 ---

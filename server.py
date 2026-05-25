@@ -24,6 +24,7 @@ from tools.write import (
     delete_ticket, attach_file,
 )
 from tools.utils import list_metadata
+from tools.graph_admin import add_project_to_graph, remove_project_from_graph, list_active_projects, refresh_project_graph, view_graph
 
 mcp = FastMCP("odoo-mcp")
 
@@ -48,6 +49,11 @@ for _fn in [
     list_metadata,
     list_attachments,
     get_attachment,
+    add_project_to_graph,
+    remove_project_from_graph,
+    list_active_projects,
+    refresh_project_graph,
+    view_graph,
 ]:
     mcp.tool()(_fn)
 
