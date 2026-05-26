@@ -59,6 +59,7 @@ async def create_stage(
     sequence: int = 10,
 ) -> dict:
     """Create a Kanban stage/sprint column and assign it to a project."""
+    await client.check_project_access(project_id)
     vals: dict = {
         "name": name,
         "project_ids": [(4, project_id)],
@@ -96,6 +97,7 @@ async def create_ticket(
     """Create a new task. Returns {id, title, stage, description}."""
     if deadline:
         _validate_date(deadline)
+    await client.check_project_access(project_id)
     vals: dict = {"name": title, "project_id": project_id, "priority": priority}
     if description is not None:
         vals["description"] = description if description.strip().startswith("<") else client.md_to_html(description)
@@ -202,6 +204,7 @@ async def add_subtasks(
     if not raw_project:
         raise ValueError(f"Ticket {ticket_id} has no project — cannot create subtasks")
     project_id: int = raw_project[0]  # many2one returns [id, name]
+    await client.check_project_access(project_id)
 
     subtask_ids = []
     for name in subtasks:
@@ -317,6 +320,11 @@ async def update_ticket(
     if not vals:
         raise ValueError("No fields to update — pass at least one parameter")
 
+    _task = await client._rpc(model, "read", [[ticket_id]], {"fields": ["project_id"]})
+    if not _task:
+        raise ValueError(f"Task {ticket_id} not found")
+    await client.check_project_access(_task[0]["project_id"][0])
+
     await client._rpc(model, "write", [[ticket_id], vals])
     try:
         _pid = None
@@ -374,6 +382,10 @@ async def delete_ticket(
     model: str = "project.task",
 ) -> dict:
     """Permanently delete a task by ID. Returns {ticket_id, deleted}."""
+    _task = await client._rpc(model, "read", [[ticket_id]], {"fields": ["project_id"]})
+    if not _task:
+        raise ValueError(f"Task {ticket_id} not found")
+    await client.check_project_access(_task[0]["project_id"][0])
     await client._rpc(model, "unlink", [[ticket_id]])
     try:
         _pid = next((pid for pid, sub in graph.projects.items() if ticket_id in sub["tickets"]), None)
@@ -392,6 +404,10 @@ async def add_comment(
     model: str = "project.task",
 ) -> dict:
     """Post a public chatter message on a ticket. Notifies followers. Returns {ticket_id, message_id}."""
+    _task = await client._rpc(model, "read", [[ticket_id]], {"fields": ["project_id"]})
+    if not _task:
+        raise ValueError(f"Task {ticket_id} not found")
+    await client.check_project_access(_task[0]["project_id"][0])
     message_id: int = await client._rpc(
         model, "message_post", [[ticket_id]],
         {"body": body, "message_type": "comment", "subtype_xmlid": "mail.mt_comment"},
@@ -411,6 +427,10 @@ async def post_log_note(
     model: str = "project.task",
 ) -> dict:
     """Post an internal log note on a ticket. Visible to internal users only — does NOT notify followers. Returns {ticket_id, message_id}."""
+    _task = await client._rpc(model, "read", [[ticket_id]], {"fields": ["project_id"]})
+    if not _task:
+        raise ValueError(f"Task {ticket_id} not found")
+    await client.check_project_access(_task[0]["project_id"][0])
     message_id: int = await client._rpc(
         model, "message_post", [[ticket_id]],
         {"body": body, "message_type": "comment", "subtype_xmlid": "mail.mt_note"},
@@ -434,6 +454,10 @@ async def attach_file(
 ) -> dict:
     """Attach a file to a ticket. content must be a UTF-8 text string (markdown, JSON, plain text).
     Set overwrite=True to replace an existing attachment with the same name in-place."""
+    _task = await client._rpc(model, "read", [[ticket_id]], {"fields": ["project_id"]})
+    if not _task:
+        raise ValueError(f"Task {ticket_id} not found")
+    await client.check_project_access(_task[0]["project_id"][0])
     resolved_mimetype = mimetype or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
 

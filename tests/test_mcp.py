@@ -149,7 +149,7 @@ async def test_create_ticket_success():
     slim_task = {
         "id": 99, "name": "New task", "stage_id": [1, "Backlog"], "description": "",
     }
-    with patch.object(OdooClient, "_rpc_sync", side_effect=[99, [slim_task]]):
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[1, 99, [slim_task]]):
         result = await create_ticket("New task", project_id=2)
     assert result["id"] == 99
     assert result["title"] == "New task"
@@ -195,7 +195,8 @@ async def test_transition_stage_success():
                     "description": "", "child_ids": [], "date_deadline": False,
                     "create_date": "2026-01-01 00:00:00", "write_date": "2026-01-02 00:00:00"}
 
-    with patch.object(OdooClient, "_rpc_sync", side_effect=[[ticket_task], stage, True, [updated_task]]):
+    # get_ticket reads ticket; stage search; update_ticket: reads task + access check + write; get_ticket reads again
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[[ticket_task], stage, [ticket_task], 1, True, [updated_task]]):
         result = await transition_stage(5, "In Progress")
     assert result["stage"]["name"] == "In Progress"
 
@@ -354,10 +355,10 @@ async def test_create_project_creates_default_stages():
 @pytest.mark.asyncio
 async def test_bulk_create_stages_success():
     from tools.write import bulk_create_stages
-    # Each create_stage: 1 create RPC + 1 read RPC
+    # Each create_stage: access check (search_count) + create + read
     side_effects = [
-        10, [{"id": 10, "name": "Sprint 1", "sequence": 10}],
-        11, [{"id": 11, "name": "Sprint 2", "sequence": 20}],
+        1, 10, [{"id": 10, "name": "Sprint 1", "sequence": 10}],
+        1, 11, [{"id": 11, "name": "Sprint 2", "sequence": 20}],
     ]
     with patch.object(OdooClient, "_rpc_sync", side_effect=side_effects):
         result = await bulk_create_stages(
@@ -373,7 +374,8 @@ async def test_bulk_create_tickets_success():
     from tools.write import bulk_create_tickets
     slim_a = {"id": 101, "name": "Task A", "stage_id": [10, "Sprint 1"], "description": ""}
     slim_b = {"id": 102, "name": "Task B", "stage_id": [10, "Sprint 1"], "description": ""}
-    side_effects = [101, [slim_a], 102, [slim_b]]
+    # Each create_ticket: access check (search_count) + create + read
+    side_effects = [1, 101, [slim_a], 1, 102, [slim_b]]
     with patch.object(OdooClient, "_rpc_sync", side_effect=side_effects):
         result = await bulk_create_tickets(
             [{"title": "Task A", "stage_id": 10}, {"title": "Task B", "stage_id": 10}],
@@ -393,6 +395,8 @@ async def test_bulk_create_tickets_stops_on_failure():
 
     def fail_on_second(_model, _method, _args, _kwargs=None):
         nonlocal call_count
+        if _method == "search_count":
+            return 1  # access check always passes
         call_count += 1
         if call_count == 1:
             return 101
@@ -462,7 +466,8 @@ async def test_add_subtasks_success():
     from tools.write import add_subtasks
     parent = {"id": 10, "name": "Auth", "stage_id": [1, "To Do"], "priority": "0",
               "user_ids": [], "tag_ids": [], "project_id": [5, "TiffinConnect"]}
-    with patch.object(OdooClient, "_rpc_sync", side_effect=[[parent], 201, 202]):
+    # read parent task, access check (search_count), create subtask A, create subtask B
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[[parent], 1, 201, 202]):
         result = await add_subtasks(10, ["Task A", "Task B"])
     assert result["created"] == 2
     assert result["subtask_ids"] == [201, 202]
@@ -474,7 +479,8 @@ async def test_create_ticket_with_subtasks():
     slim = {"id": 99, "name": "Auth", "stage_id": [1, "To Do"], "description": ""}
     parent_for_add = {"id": 99, "name": "Auth", "stage_id": [1, "To Do"], "priority": "0",
                       "user_ids": [], "tag_ids": [], "project_id": [5, "TC"]}
-    with patch.object(OdooClient, "_rpc_sync", side_effect=[99, [slim], [parent_for_add], 201, 202]):
+    # create_ticket: access check + create + read; add_subtasks: read parent + access check + create×2
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[1, 99, [slim], [parent_for_add], 1, 201, 202]):
         result = await create_ticket("Auth", project_id=5, subtasks=["Step A", "Step B"])
     assert result["subtask_count"] == 2
 
@@ -485,7 +491,8 @@ async def test_bulk_create_tickets_forwards_subtasks():
     slim = {"id": 101, "name": "T", "stage_id": [1, "To Do"], "description": ""}
     parent = {"id": 101, "name": "T", "stage_id": [1, "To Do"], "priority": "0",
               "user_ids": [], "tag_ids": [], "project_id": [5, "TC"]}
-    with patch.object(OdooClient, "_rpc_sync", side_effect=[101, [slim], [parent], 301]):
+    # create_ticket: access check + create + read; add_subtasks: read parent + access check + create
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[1, 101, [slim], [parent], 1, 301]):
         result = await bulk_create_tickets(
             [{"title": "T", "subtasks": ["Sub 1"]}], project_id=5
         )
@@ -558,7 +565,9 @@ def test_build_url_with_and_without_project():
 @pytest.mark.asyncio
 async def test_attach_file_markdown():
     _, write_mod, _ = _fresh_modules()
-    with mock_rpc_sync(99):
+    task_rec = [{"project_id": [1, "Test"]}]
+    # read task (project check), access check (search_count), create attachment
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, 99]):
         result = await write_mod.attach_file(
             ticket_id=1,
             filename="login_context.md",
@@ -573,7 +582,8 @@ async def test_attach_file_markdown():
 @pytest.mark.asyncio
 async def test_attach_file_custom_mimetype():
     _, write_mod, _ = _fresh_modules()
-    with mock_rpc_sync(101):
+    task_rec = [{"project_id": [1, "Test"]}]
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, 101]):
         result = await write_mod.attach_file(
             ticket_id=5,
             filename="spec.pdf",
@@ -589,7 +599,9 @@ async def test_attach_file_overwrite_replaces_existing():
     """overwrite=True with a matching attachment → write in-place, replaced=True, same ID."""
     _, write_mod, _ = _fresh_modules()
     existing = [{"id": 55}]
-    with patch.object(OdooClient, "_rpc_sync", side_effect=[existing, True]):
+    task_rec = [{"project_id": [1, "Test"]}]
+    # read task, access check, search for existing attachment, write in-place
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, existing, True]):
         result = await write_mod.attach_file(
             ticket_id=1,
             filename="Backend_Handoff.md",
@@ -607,7 +619,8 @@ async def test_attach_file_overwrite_replaces_existing():
 async def test_attach_file_overwrite_creates_when_missing():
     """overwrite=True with no existing attachment → create new record, replaced=False."""
     _, write_mod, _ = _fresh_modules()
-    with patch.object(OdooClient, "_rpc_sync", side_effect=[[], 99]):
+    task_rec = [{"project_id": [1, "Test"]}]
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, [], 99]):
         result = await write_mod.attach_file(
             ticket_id=1,
             filename="Backend_Handoff.md",
@@ -624,7 +637,8 @@ async def test_attach_file_overwrite_creates_when_missing():
 async def test_attach_file_default_no_overwrite_always_creates():
     """overwrite=False (default) always calls create, never search_read."""
     _, write_mod, _ = _fresh_modules()
-    with mock_rpc_sync(77):
+    task_rec = [{"project_id": [1, "Test"]}]
+    with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, 77]):
         result = await write_mod.attach_file(
             ticket_id=2,
             filename="Frontend_Handoff.md",
@@ -642,6 +656,10 @@ async def test_attach_file_default_no_overwrite_always_creates():
 async def test_add_comment_uses_mt_comment():
     captured = {}
     def capture(_model, method, args, kwargs=None):
+        if method == "read":
+            return [{"project_id": [1, "Test"]}]
+        if method == "search_count":
+            return 1
         if method == "message_post":
             captured.update(kwargs or {})
             return 77
@@ -656,6 +674,10 @@ async def test_add_comment_uses_mt_comment():
 async def test_post_log_note_uses_mt_note():
     captured = {}
     def capture(_model, method, args, kwargs=None):
+        if method == "read":
+            return [{"project_id": [1, "Test"]}]
+        if method == "search_count":
+            return 1
         if method == "message_post":
             captured.update(kwargs or {})
             return 88
@@ -2059,7 +2081,8 @@ async def test_create_stage_emits_stage_created():
 
     stage_record = [{"id": 30, "name": "Done", "sequence": 30}]
     with patch("tools.write.graph", new=g):
-        with patch.object(OdooClient, "_rpc_sync", side_effect=[30, stage_record]):
+        # access check (search_count), create, read
+        with patch.object(OdooClient, "_rpc_sync", side_effect=[1, 30, stage_record]):
             result = await create_stage("Done", project_id=5, sequence=30)
 
     assert result["id"] == 30
@@ -2097,8 +2120,10 @@ async def test_update_ticket_patches_graph():
         "create_date": "2026-01-01 00:00:00", "write_date": "2026-01-02 00:00:00",
     }
 
+    task_rec = [{"project_id": [5, "Test Project"]}]
     with patch("tools.write.graph", new=g):
-        with patch.object(OdooClient, "_rpc_sync", side_effect=[True, [updated_task]]):
+        # read task (for access check), access check, write, get_ticket read
+        with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, True, [updated_task]]):
             await update_ticket(100, title="Renamed Title")
 
     assert g.projects[5]["tickets"][100]["name"] == "Renamed Title"
@@ -2113,8 +2138,10 @@ async def test_delete_ticket_removes_from_graph():
 
     assert 100 in g.projects[5]["tickets"]
 
+    task_rec = [{"project_id": [5, "Test Project"]}]
     with patch("tools.write.graph", new=g):
-        with patch.object(OdooClient, "_rpc_sync", return_value=True):
+        # read task (for access check), access check, unlink
+        with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, True]):
             result = await delete_ticket(100)
 
     assert result["deleted"] is True
@@ -2129,8 +2156,10 @@ async def test_add_comment_increments_count():
     g.projects[5] = make_subgraph(project_id=5)
     assert g.projects[5]["tickets"][100]["comment_count"] == 0
 
+    task_rec = [{"project_id": [5, "Test Project"]}]
     with patch("tools.write.graph", new=g):
-        with patch.object(OdooClient, "_rpc_sync", return_value=999):
+        # read task (for access check), access check, message_post
+        with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, 999]):
             result = await add_comment(100, "Ship it!")
 
     assert result["message_id"] == 999
@@ -2145,8 +2174,10 @@ async def test_post_log_note_increments_count():
     g.projects[5] = make_subgraph(project_id=5)
     assert g.projects[5]["tickets"][100]["log_note_count"] == 0
 
+    task_rec = [{"project_id": [5, "Test Project"]}]
     with patch("tools.write.graph", new=g):
-        with patch.object(OdooClient, "_rpc_sync", return_value=888):
+        # read task (for access check), access check, message_post
+        with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, 888]):
             result = await post_log_note(100, "Internal note")
 
     assert result["message_id"] == 888
@@ -2161,8 +2192,10 @@ async def test_attach_file_increments_count():
     g.projects[5] = make_subgraph(project_id=5)
     assert g.projects[5]["tickets"][100]["attachment_count"] == 0
 
+    task_rec = [{"project_id": [5, "Test Project"]}]
     with patch("tools.write.graph", new=g):
-        with patch.object(OdooClient, "_rpc_sync", return_value=55):
+        # read task (for access check), access check, create attachment
+        with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, 55]):
             result = await attach_file(100, "spec.md", "# content")
 
     assert result["attachment_id"] == 55
@@ -2183,9 +2216,11 @@ async def test_write_through_graph_failure_does_not_raise():
         "create_date": "2026-01-01 00:00:00", "write_date": "2026-01-02 00:00:00",
     }
 
+    task_rec = [{"project_id": [5, "Test Project"]}]
     with patch("tools.write.graph", new=g):
         with patch.object(g, "apply_write", side_effect=RuntimeError("graph exploded")):
-            with patch.object(OdooClient, "_rpc_sync", side_effect=[True, [updated_task]]):
+            # read task (for access check), access check, write, get_ticket read
+            with patch.object(OdooClient, "_rpc_sync", side_effect=[task_rec, 1, True, [updated_task]]):
                 result = await update_ticket(100, title="Any Name")
 
     # Tool must succeed — graph failure is best-effort
